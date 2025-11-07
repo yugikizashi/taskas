@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-# map_from_txt_leaflet.py
-# Skaito .txt, randa koordinates, sugeneruoja Leaflet+OSM HTML,
-# paleidžia lokalų HTTP serverį ir atidaro naršyklę. API rakto nereikia.
+# map_from_txt_leaflet_fileurl_gui.py
+# Be API rakto. Paprastesnis variantas: nenaudoja vietinio serverio – atidaro HTML per file://
 
-import re, tempfile, webbrowser, sys, os, socket, http.server, threading
+import re, tempfile, webbrowser, sys
 from pathlib import Path
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox
+except Exception:
+    tk = None
 
 COORD_RE = re.compile(r"([-+]?\d{1,3}\.\d+)")
 PAIR_RE = re.compile(r"([-+]?\d{1,3}\.\d+)\s*[,;\s]\s*([-+]?\d{1,3}\.\d+)")
 
 def parse_coordinates(text: str):
     coords = []
-    # 1) tiesioginės poros "lat, lon"
     for m in PAIR_RE.finditer(text):
         lat, lon = float(m.group(1)), float(m.group(2))
         if -90 <= lat <= 90 and -180 <= lon <= 180:
             coords.append((lat, lon))
-    # 2) "Latitude" / "Longitude"
     lat_vals = re.findall(r"Latitude[:=\s]*([-+]?\d{1,3}\.\d+)", text, flags=re.IGNORECASE)
     lon_vals = re.findall(r"Longitude[:=\s]*([-+]?\d{1,3}\.\d+)", text, flags=re.IGNORECASE)
     if len(lat_vals) == len(lon_vals) and len(lat_vals) > 0:
@@ -24,14 +27,12 @@ def parse_coordinates(text: str):
             la_f, lo_f = float(la), float(lo)
             if -90 <= la_f <= 90 and -180 <= lo_f <= 180:
                 coords.append((la_f, lo_f))
-    # 3) seka: lat lon lat lon
     if not coords:
         nums = [float(n) for n in COORD_RE.findall(text)]
         for i in range(0, len(nums)-1, 2):
             lat, lon = nums[i], nums[i+1]
             if -90 <= lat <= 90 and -180 <= lon <= 180:
                 coords.append((lat, lon))
-    # dedup
     seen = set(); uniq = []
     for c in coords:
         if c not in seen:
@@ -72,40 +73,51 @@ L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
 """
     return html
 
-def find_free_port():
-    import socket
-    s = socket.socket(); s.bind(('',0)); port = s.getsockname()[1]; s.close(); return port
+def choose_file_dialog():
+    if tk is None:
+        return None
+    root = tk.Tk(); root.withdraw()
+    path = filedialog.askopenfilename(
+        title="Pasirink .txt failą su koordinatėmis",
+        filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+    )
+    root.destroy()
+    return path
 
-def serve_file_and_open(html_path: Path):
-    port = find_free_port()
-    handler = http.server.SimpleHTTPRequestHandler
-    cwd = html_path.parent
-    os.chdir(str(cwd))
-    httpd = http.server.ThreadingHTTPServer(('127.0.0.1', port), handler)
-    url = f'http://127.0.0.1:{port}/{html_path.name}'
-    print("Atidaroma naršyklė:", url)
-    threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        httpd.shutdown()
+def show_error(msg: str):
+    if tk is not None:
+        root = tk.Tk(); root.withdraw()
+        messagebox.showerror("Klaida", msg)
+        root.destroy()
+    else:
+        print(msg)
 
 def process_file(path: Path):
-    text = path.read_text(encoding='utf-8', errors='ignore')
+    try:
+        text = path.read_text(encoding='utf-8', errors='ignore')
+    except Exception as e:
+        show_error(f"Nepavyko perskaityti failo:\n{e}")
+        return
     coords = parse_coordinates(text)
     if not coords:
-        print("Nerasta koordinačių.")
+        show_error("Nerasta koordinačių šiame faile.")
         return
     html = make_leaflet_html(coords, title=path.name)
-    out = Path(tempfile.gettempdir()) / f"leaflet_map_{os.getpid()}.html"
+    out = Path(tempfile.gettempdir()) / "leaflet_map_fileurl.html"
     out.write_text(html, encoding='utf-8')
-    serve_file_and_open(out)
+    webbrowser.open(out.as_uri())  # file://
+    # programa gali baigtis – naršyklė vis tiek atidarys failą
 
 if __name__ == '__main__':
     if len(sys.argv)>1:
         p = Path(sys.argv[1])
-        if not p.exists(): print("Failas nerastas:", p); sys.exit(1)
+        if not p.exists():
+            show_error(f"Failas nerastas:\n{p}")
+            sys.exit(1)
         process_file(p)
     else:
-        # galima praplėsti su failo dialogu, bet kad EXE būtų be papildomų priklausomybių – paliekam paprastai
-        print("Naudojimas: map_from_txt_leaflet.exe path\\to\\file.txt (arba python map_from_txt_leaflet.py path/to/file.txt)")
+        chosen = choose_file_dialog()
+        if chosen:
+            process_file(Path(chosen))
+        else:
+            show_error("Failas nepasirinktas.")
