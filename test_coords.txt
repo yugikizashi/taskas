@@ -1,0 +1,7 @@
+Latitude: 54.6872
+Longitude: 25.2797
+
+Latitude: 55.7033
+Longitude: 21.1443
+
+54.9, 23.9
